@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "ansi-control-codes"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fea32e0d6400b50c211ad0d63de1623da597e9f8d9a7280dfe54e83f5216b3a"
+
+[[package]]
 name = "console"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -37,6 +43,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 name = "spotify-autoskip"
 version = "0.1.0"
 dependencies = [
+ "ansi-control-codes",
  "console",
 ]
 

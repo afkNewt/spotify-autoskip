@@ -44,7 +44,9 @@ impl Spotify {
             .stdout
             .into_iter()
             .map(|ascii| ascii as char)
-            .collect::<String>();
+            .collect::<String>()
+            .trim()
+            .to_owned();
 
         return Ok(name);
     }
