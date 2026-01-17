@@ -35,9 +35,10 @@ pub fn main() {
     wait_for_spotify_ready(&connection);
     let _ = call_method(&connection, Method::Play);
 
-    loop {
-        while get_boolean_property(&connection, "CanGoNext") {
+    while let Ok(can_go) = get_boolean_property(&connection, "CanGoNext") {
+        if can_go {
             std::thread::sleep(Duration::from_secs(1));
+            continue;
         }
 
         let _ = child.kill();
@@ -47,21 +48,19 @@ pub fn main() {
         let _ = call_method(&connection, Method::Play);
     }
 }
-fn get_boolean_property(connection: &Connection, property: &str) -> bool {
-    return connection
+
+fn get_boolean_property(connection: &Connection, property: &str) -> Result<bool, zbus::Error> {
+    return Ok(connection
         .call_method(
             Some(DESTINATION),
             PATH,
             Some("org.freedesktop.DBus.Properties"),
             "Get",
             &("org.mpris.MediaPlayer2.Player", property),
-        )
-        .unwrap()
+        )?
         .body()
-        .deserialize::<OwnedValue>()
-        .unwrap()
-        .try_into()
-        .unwrap();
+        .deserialize::<OwnedValue>()?
+        .try_into()?);
 }
 
 fn call_method(connection: &Connection, method: Method) -> Result<zbus::Message, zbus::Error> {
