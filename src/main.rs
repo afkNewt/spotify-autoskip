@@ -29,9 +29,12 @@ impl Method {
 }
 
 pub fn main() {
+    let mut binding = Command::new("spotify");
+    let spotify = binding.arg("--minimized");
+
     let connection = Connection::session().unwrap();
 
-    let mut child = Command::new("spotify").spawn().unwrap();
+    let mut child = spotify.spawn().unwrap();
     wait_for_spotify_ready(&connection);
     let _ = call_method(&connection, Method::Play);
 
@@ -42,7 +45,7 @@ pub fn main() {
         }
 
         let _ = child.kill();
-        child = Command::new("spotify").spawn().unwrap();
+        child = spotify.spawn().unwrap();
         wait_for_spotify_ready(&connection);
         let _ = call_method(&connection, Method::Next);
         let _ = call_method(&connection, Method::Play);
