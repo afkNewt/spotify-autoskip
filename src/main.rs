@@ -1,5 +1,11 @@
-use std::{process::Command, time::Duration};
-use zbus::{blocking::Connection, zvariant::OwnedValue};
+use std::{
+    collections::HashMap,
+    process::{Child, Command},
+    time::Duration,
+};
+
+use futures_util::StreamExt;
+use zbus::{Connection, Message, Proxy, zvariant::OwnedValue};
 
 // busctl --user introspect org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2
 const DESTINATION: &str = "org.mpris.MediaPlayer2.spotify";
@@ -28,60 +34,134 @@ impl Method {
     }
 }
 
-pub fn main() {
-    let mut binding = Command::new("spotify");
-    let spotify = binding.arg("--minimized");
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let connection = Connection::session().await?;
 
-    let connection = Connection::session().unwrap();
+    let proxy = Proxy::new(
+        &connection,
+        DESTINATION,
+        PATH,
+        "org.freedesktop.DBus.Properties",
+    )
+    .await?;
 
-    let mut child = spotify.spawn().unwrap();
-    wait_for_spotify_ready(&connection);
-    let _ = call_method(&connection, Method::Play);
+    let mut signal = proxy.receive_signal("PropertiesChanged").await?;
+    let mut owner = proxy.receive_owner_changed().await?;
 
-    while let Ok(can_go) = get_boolean_property(&connection, "CanGoNext") {
-        if can_go {
-            std::thread::sleep(Duration::from_secs(1));
-            continue;
+    let mut restarted = false;
+
+    let mut child = spawn_spotify()?;
+    wait_for_spotify_ready(&connection).await;
+    call_method(&connection, Method::Play).await?;
+
+    loop {
+        tokio::select! {
+            message = signal.next() => {
+                let Some(message) = message else {
+                    // stream dropped
+                    return Ok(());
+                };
+
+                let Some(track_id) = track_id(&message) else {
+                    continue;
+                };
+
+                if is_ad(&track_id) == Some(true) {
+                    restart_spotify(&mut child)?;
+                    wait_for_spotify_ready(&connection).await;
+                    call_method(&connection, Method::Play).await?;
+                    call_method(&connection, Method::Next).await?;
+
+                    restarted = true;
+                    continue;
+                }
+            }
+            message = owner.next() => {
+                let Some(owner) = message else {
+                    // stream dropped
+                    return Ok(())
+                };
+
+                if owner.is_some() {
+                    // gained a new owner
+                    continue;
+                };
+
+                // lost an owner
+                if restarted {
+                    // owner loss caused by self
+                    restarted = false;
+                    continue;
+                }
+
+                // owner loss not caused by self
+                return Ok(());
+            }
         }
-
-        let _ = child.kill();
-        child = spotify.spawn().unwrap();
-        wait_for_spotify_ready(&connection);
-        let _ = call_method(&connection, Method::Next);
-        let _ = call_method(&connection, Method::Play);
     }
 }
 
-fn get_boolean_property(connection: &Connection, property: &str) -> Result<bool, zbus::Error> {
-    return Ok(connection
+fn track_id(message: &Message) -> Option<String> {
+    let (_interface, changed, _invalidated): (String, HashMap<String, OwnedValue>, Vec<String>) =
+        message
+            .body()
+            .deserialize()
+            .expect("Failed to deserialize message");
+
+    let metadata_value = changed.get("Metadata")?;
+    let metadata: HashMap<String, OwnedValue> = metadata_value
+        .clone()
+        .try_into()
+        .expect("Failed to deserialize metadata");
+
+    let track_id_value = metadata.get("mpris:trackid")?;
+    let track_id = track_id_value
+        .clone()
+        .try_into()
+        .expect("Failed to deserialize track ID");
+
+    return Some(track_id);
+}
+
+fn is_ad(track_id: &str) -> Option<bool> {
+    let is_ad = track_id.split('/').nth(3)? == "ad";
+    return Some(is_ad);
+}
+
+async fn call_method(
+    connection: &Connection,
+    method: Method,
+) -> Result<zbus::Message, zbus::Error> {
+    return connection
         .call_method(
             Some(DESTINATION),
             PATH,
-            Some("org.freedesktop.DBus.Properties"),
-            "Get",
-            &("org.mpris.MediaPlayer2.Player", property),
-        )?
-        .body()
-        .deserialize::<OwnedValue>()?
-        .try_into()?);
+            Some(method.interface()),
+            method.name(),
+            &(),
+        )
+        .await;
 }
 
-fn call_method(connection: &Connection, method: Method) -> Result<zbus::Message, zbus::Error> {
-    return connection.call_method(
-        Some(DESTINATION),
-        PATH,
-        Some(method.interface()),
-        method.name(),
-        &(),
-    );
-}
-
-fn wait_for_spotify_ready(connection: &Connection) {
+async fn wait_for_spotify_ready(connection: &Connection) {
     loop {
-        if call_method(connection, Method::Ping).is_ok() {
+        if call_method(connection, Method::Ping).await.is_ok() {
             return;
         }
 
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+fn spawn_spotify() -> Result<std::process::Child, std::io::Error> {
+    Command::new("spotify").arg("--minimized").spawn()
+}
+
+fn restart_spotify(child: &mut Child) -> Result<(), std::io::Error> {
+    child.kill()?;
+    child.wait()?;
+
+    *child = spawn_spotify()?;
+    Ok(())
 }
