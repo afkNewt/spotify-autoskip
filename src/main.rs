@@ -32,9 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mut owner_changed,
     } = get_signals().await?;
 
+    let mut spotify = Spotify::new(&connection).await?;
     let mut owner_loss = OwnerLossPolicy::ExitOnLoss;
 
-    let mut spotify = Spotify::new(&connection).await?;
     loop {
         let event = tokio::select! {
             message = properties_changed.next() => {
